@@ -1,0 +1,25 @@
+# Virtual environment
+venv/
+.venv/
+
+# Dataset files (too large for GitHub)
+data/*.csv
+data/*.zip
+
+# Trained model files
+models/*.pkl
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code settings
+.vscode/
