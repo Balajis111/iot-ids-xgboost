@@ -91,7 +91,57 @@ if uploaded_file is not None:
 
     st.dataframe(result_df[['prediction', 'confidence']].head(20),
                  use_container_width=True)
+# Attack type breakdown
+st.subheader("Attack Type Breakdown")
 
+try:
+    mc_model  = joblib.load('models/xgboost_multiclass.pkl')
+    mc_scaler = joblib.load('models/scaler_multiclass.pkl')
+    le_target = joblib.load('models/label_encoder_target.pkl')
+
+    # Predict attack types
+    df_mc_scaled = pd.DataFrame(
+        mc_scaler.transform(df),
+        columns=df.columns
+    )
+    attack_type_preds = mc_model.predict(df_mc_scaled)
+    attack_labels     = le_target.inverse_transform(attack_type_preds)
+
+    # Count each type
+    type_counts = pd.Series(attack_labels).value_counts().reset_index()
+    type_counts.columns = ['Attack Type', 'Count']
+
+    # Color map for attack types
+    color_map = {
+        'Normal':        '#2ecc71',
+        'Generic':       '#3498db',
+        'Exploits':      '#e74c3c',
+        'Fuzzers':       '#e67e22',
+        'DoS':           '#c0392b',
+        'Reconnaissance':'#9b59b6',
+        'Analysis':      '#1abc9c',
+        'Backdoor':      '#e91e63',
+        'Shellcode':     '#ff5722',
+        'Worms':         '#795548'
+    }
+
+    import plotly.express as px
+    fig = px.bar(
+        type_counts,
+        x='Attack Type',
+        y='Count',
+        title='Detected Attack Types',
+        color='Attack Type',
+        color_discrete_map=color_map
+    )
+    fig.update_layout(showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Also show as table
+    st.dataframe(type_counts, use_container_width=True)
+
+except Exception as e:
+    st.warning(f"Multiclass model not found: {e}")
     # SHAP explanation
     st.subheader("SHAP Explainability — Why did the model decide this?")
     st.markdown("Top features driving the predictions:")
