@@ -11,6 +11,17 @@
 | Total Test Connections | 82,332 |
 | Attacks Detected | 61,895 |
 
+## Dashboard Screenshots
+
+### Overview
+![Overview](outputs/dashboard_overview.png)
+
+### Predictions
+![Predictions](outputs/dashboard_predictions.png)
+
+### SHAP Explainability
+![SHAP](outputs/dashboard_shap.png)
+
 ## Dashboard
 Upload any network traffic parquet/CSV file to get:
 - Live attack vs normal classification
