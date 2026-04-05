@@ -1,0 +1,10 @@
+{
+  "accuracy": 90.0,
+  "precision": 91.0,
+  "recall": 93.0,
+  "f1": 91.0,
+  "total_train": 175341,
+  "total_test": 82332,
+  "attack_train": 119341,
+  "attack_test": 45332
+}

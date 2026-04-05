@@ -31,7 +31,32 @@ mc_model, mc_scaler, le_target = load_multiclass_models()
 st.title("Lightweight Explainable IDS for IoT Traffic")
 st.markdown("Detects network intrusions using XGBoost + SHAP explainability")
 st.divider()
+# Model performance metrics
+st.subheader("Model Performance")
 
+try:
+    import json
+    with open('outputs/model_metrics.json') as f:
+        m = json.load(f)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Accuracy",  f"{m['accuracy']}%")
+    col2.metric("Precision", f"{m['precision']}%")
+    col3.metric("Recall",    f"{m['recall']}%")
+    col4.metric("F1 Score",  f"{m['f1']}%")
+
+    st.divider()
+
+    col5, col6, col7, col8 = st.columns(4)
+    col5.metric("Training samples", f"{m['total_train']:,}")
+    col6.metric("Test samples",     f"{m['total_test']:,}")
+    col7.metric("Attack samples",   f"{m['attack_train']:,}")
+    col8.metric("Dataset",          "UNSW-NB15")
+
+except Exception as e:
+    st.warning(f"Metrics file not found: {e}")
+
+st.divider()
 st.sidebar.header("Upload Network Traffic Data")
 uploaded_file = st.sidebar.file_uploader(
     "Upload a CSV or Parquet file",
