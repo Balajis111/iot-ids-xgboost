@@ -5,6 +5,7 @@ venv/
 # Dataset files (too large for GitHub)
 data/*.csv
 data/*.zip
+data/*.parquet
 
 # Trained model files
 models/*.pkl
