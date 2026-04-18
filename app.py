@@ -36,7 +36,7 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_model():
-    model    = joblib.load("model/xgboost_ids.pkl")       # your trained model
+    model = joblib.load("models/xgboost_ids.pkl")    # your trained model
     explainer = shap.TreeExplainer(model)
     return model, explainer
 
@@ -45,7 +45,6 @@ model, explainer = load_model()
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
-st.sidebar.image("assets/logo.png", use_column_width=True)  # optional
 st.sidebar.title("🛡️ IoT IDS · SOC View")
 page = st.sidebar.radio(
     "Navigation",
@@ -168,12 +167,226 @@ elif page == "📈 Alert Queue":
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "📊 Dashboard":
     st.title("📊 IDS Overview Dashboard")
-    st.info("Your existing dashboard page — plug your current code here.")
 
+    uploaded_file = st.file_uploader("Upload your dataset (CSV or Parquet)", type=["csv", "parquet"])
 
+    if uploaded_file is not None:
+        import plotly.express as px
+        import plotly.graph_objects as go
+
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_parquet(uploaded_file)
+
+        total      = len(df)
+        attacks    = int(df["label"].sum()) if "label" in df.columns else 0
+        normal     = total - attacks
+        attack_pct = (attacks / total) * 100
+
+        # ── Metric cards ──────────────────────────────────────────────────────
+        st.markdown("""
+        <style>
+        .metric-card {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 1px solid #0f3460;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+        .metric-value { font-size: 2.2rem; font-weight: 700; margin: 0; }
+        .metric-label { font-size: 0.85rem; color: #888; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(f'<div class="metric-card"><p class="metric-value" style="color:#6C7BFF">{total:,}</p><p class="metric-label">Total Flows</p></div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="metric-card"><p class="metric-value" style="color:#34C759">{normal:,}</p><p class="metric-label">Normal</p></div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="metric-card"><p class="metric-value" style="color:#FF2D55">{attacks:,}</p><p class="metric-label">Attacks</p></div>', unsafe_allow_html=True)
+        c4.markdown(f'<div class="metric-card"><p class="metric-value" style="color:#FF9500">{attack_pct:.1f}%</p><p class="metric-label">Attack Rate</p></div>', unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # ── Donut + Attack categories ─────────────────────────────────────────
+        col_a, col_b = st.columns([1, 2])
+
+        with col_a:
+            st.subheader("Traffic Split")
+            fig_donut = go.Figure(go.Pie(
+                labels=["Normal", "Attack"],
+                values=[normal, attacks],
+                hole=0.6,
+                marker_colors=["#34C759", "#FF2D55"],
+                textinfo="percent",
+                hovertemplate="%{label}: %{value:,}<extra></extra>",
+            ))
+            fig_donut.update_layout(
+                height=280,
+                margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="white",
+                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                annotations=[dict(
+                    text=f"{attack_pct:.0f}%<br>Attack",
+                    x=0.5, y=0.5,
+                    font_size=16,
+                    showarrow=False,
+                    font_color="#FF2D55"
+                )],
+            )
+            st.plotly_chart(fig_donut, use_container_width=True)
+
+        with col_b:
+            if "attack_cat" in df.columns:
+                st.subheader("Attack Category Breakdown")
+                cat_counts = df[df["label"] == 1]["attack_cat"].value_counts().reset_index()
+                cat_counts.columns = ["Category", "Count"]
+                cat_counts = cat_counts[cat_counts["Category"] != "Normal"]
+                fig_cat = px.bar(
+                    cat_counts, x="Count", y="Category",
+                    orientation="h",
+                    color="Count",
+                    color_continuous_scale="oranges",
+                    text="Count"
+                )
+                fig_cat.update_traces(textposition="outside")
+                fig_cat.update_layout(
+                    height=280,
+                    margin=dict(l=0, r=40, t=10, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white",
+                    coloraxis_showscale=False,
+                    yaxis=dict(showgrid=False),
+                    xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+                )
+                st.plotly_chart(fig_cat, use_container_width=True)
+
+        st.markdown("---")
+
+        # ── Top features by variance + Rate distribution ───────────────────────
+        col_c, col_d = st.columns(2)
+
+        with col_c:
+            st.subheader("Top 10 Features by Variance")
+            from realtime_input import FEATURES
+            num_cols = [f for f in FEATURES if f in df.columns]
+            variances = df[num_cols].select_dtypes(include="number").var().sort_values(ascending=False).head(10)
+            fig_var = px.bar(
+                x=variances.values,
+                y=variances.index,
+                orientation="h",
+                color=variances.values,
+                color_continuous_scale="blues",
+            )
+            fig_var.update_layout(
+                height=300,
+                margin=dict(l=0, r=20, t=10, b=10),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="white",
+                coloraxis_showscale=False,
+                yaxis=dict(showgrid=False),
+                xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+            )
+            st.plotly_chart(fig_var, use_container_width=True)
+
+        with col_d:
+            st.subheader("Attack vs Normal — Rate Distribution")
+            if "rate" in df.columns:
+                sample = df.sample(min(2000, len(df)), random_state=42)
+                sample["Traffic"] = sample["label"].map({0: "Normal", 1: "Attack"})
+                fig_dist = px.histogram(
+                    sample, x="rate", color="Traffic",
+                    nbins=60, barmode="overlay",
+                    color_discrete_map={"Normal": "#34C759", "Attack": "#FF2D55"},
+                    opacity=0.7,
+                )
+                fig_dist.update_layout(
+                    height=300,
+                    margin=dict(l=0, r=10, t=10, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white",
+                    legend=dict(bgcolor="rgba(0,0,0,0)"),
+                    xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+                )
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+        st.markdown("---")
+
+        # ── Raw data preview ──────────────────────────────────────────────────
+        with st.expander("📋 Raw Data Preview (first 100 rows)"):
+            st.dataframe(df.head(100), use_container_width=True)
+
+    else:
+        st.info("👆 Upload your UNSW-NB15 dataset above to see the overview.")
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: MODEL INSIGHTS  (your existing SHAP global plots, unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "🔬 Model Insights":
     st.title("🔬 Model Explainability")
-    st.info("Your existing SHAP summary plots go here.")
+    st.caption("Global SHAP analysis of the trained XGBoost model.")
+
+    uploaded_file = st.file_uploader("Upload your dataset to generate SHAP plots (CSV or Parquet)", type=["csv", "parquet"])
+
+    if uploaded_file is not None:
+        import shap
+        import matplotlib.pyplot as plt
+
+        # Load data
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_parquet(uploaded_file)
+
+        # Drop non-feature columns
+        drop_cols = [c for c in ["label", "attack_cat"] if c in df.columns]
+        X = df.drop(columns=drop_cols)
+
+        # Keep only model features
+        from realtime_input import FEATURES
+        X = X[[f for f in FEATURES if f in X.columns]]
+
+        # Sample for speed
+        sample_size = min(500, len(X))
+        X_sample = X.sample(sample_size, random_state=42)
+        # Encode categorical columns
+        for col in X_sample.select_dtypes(include=['category', 'object']).columns:
+            X_sample[col] = X_sample[col].astype(str).astype('category').cat.codes
+
+        with st.spinner("Generating SHAP values... (takes 30-60 seconds)"):
+            shap_values = explainer.shap_values(X_sample)
+
+        st.success(f"✅ SHAP values computed on {sample_size} samples")
+
+        # ── Feature importance bar plot ───────────────────────────────────────
+        st.subheader("Top Features by Mean |SHAP|")
+        fig1, ax1 = plt.subplots(figsize=(8, 5))
+        shap.summary_plot(shap_values, X_sample, plot_type="bar", show=False)
+        plt.tight_layout()
+        st.pyplot(fig1)
+        plt.close()
+
+        # ── Beeswarm / dot plot ───────────────────────────────────────────────
+        st.subheader("SHAP Value Distribution (Beeswarm)")
+        fig2, ax2 = plt.subplots(figsize=(8, 6))
+        shap.summary_plot(shap_values, X_sample, show=False)
+        plt.tight_layout()
+        st.pyplot(fig2)
+        plt.close()
+
+        # ── Top feature names table ───────────────────────────────────────────
+        st.subheader("Feature Importance Ranking")
+        import numpy as np
+        mean_shap = np.abs(shap_values).mean(axis=0)
+        importance_df = pd.DataFrame({
+            "Feature": X_sample.columns,
+            "Mean |SHAP|": mean_shap,
+        }).sort_values("Mean |SHAP|", ascending=False).reset_index(drop=True)
+        importance_df.index += 1
+        st.dataframe(importance_df, use_container_width=True)
+
+    else:
+        st.info("👆 Upload your dataset above to generate SHAP explainability plots.")

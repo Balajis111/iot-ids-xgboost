@@ -421,5 +421,5 @@ class AlertQueue:
             }
             return colours.get(val, "")
 
-        styled = df.style.applymap(colour_severity, subset=["severity"])
+        styled = df.style.map(colour_severity, subset=["severity"])
         st.dataframe(styled, use_container_width=True, hide_index=True)
