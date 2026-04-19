@@ -293,6 +293,57 @@ elif page == "📊 Dashboard":
                 st.plotly_chart(fig_dist, use_container_width=True)
 
         st.markdown("---")
+        # ── Confusion Matrix ──────────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("Model Performance on Uploaded Data")
+        drop_cols = [c for c in ["attack_cat"] if c in df.columns]
+        if "label" in df.columns:
+            from realtime_input import FEATURES
+            import matplotlib.pyplot as plt
+            from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+            X_eval = df.drop(columns=[c for c in ["label","attack_cat"] if c in df.columns])
+            X_eval = X_eval[[f for f in FEATURES if f in X_eval.columns]]
+            le_eval = joblib.load("models/label_encoder.pkl")
+            cat_cols_eval = X_eval.select_dtypes(include=["category", "object"]).columns.tolist()
+            for col in cat_cols_eval:
+                X_eval[col] = X_eval[col].astype(str).map(
+                    lambda x: le_eval.transform([x])[0] if x in le_eval.classes_ else -1
+                )
+            X_eval = X_eval.astype(float)
+            scaler_eval = joblib.load("models/scaler.pkl")
+            X_eval = pd.DataFrame(scaler_eval.transform(X_eval), columns=X_eval.columns)
+
+            y_true = df["label"].values
+            y_prob_eval = model.predict_proba(X_eval)[:,1]
+            y_pred_eval = (y_prob_eval >= threshold).astype(int)
+
+            from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
+            acc  = accuracy_score(y_true, y_pred_eval)
+            prec = precision_score(y_true, y_pred_eval)
+            rec  = recall_score(y_true, y_pred_eval)
+            f1   = f1_score(y_true, y_pred_eval)
+            fpr  = ((y_pred_eval==1)&(y_true==0)).sum() / (y_true==0).sum()
+
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Accuracy",  f"{acc*100:.1f}%")
+            m2.metric("Precision", f"{prec*100:.1f}%")
+            m3.metric("Recall",    f"{rec*100:.1f}%")
+            m4.metric("F1 Score",  f"{f1*100:.1f}%")
+            m5.metric("FP Rate",   f"{fpr*100:.1f}%")
+
+            cm = confusion_matrix(y_true, y_pred_eval)
+            fig_cm, ax_cm = plt.subplots(figsize=(5,4))
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Normal","Attack"])
+            disp.plot(ax=ax_cm, colorbar=False, cmap="Blues")
+            ax_cm.set_facecolor("#0e1117")
+            fig_cm.patch.set_facecolor("#0e1117")
+            plt.title("Confusion Matrix (Threshold 0.7)", color="white")
+            plt.tick_params(colors="white")
+            ax_cm.xaxis.label.set_color("white")
+            ax_cm.yaxis.label.set_color("white")
+            st.pyplot(fig_cm)
+            plt.close()
 
         with st.expander("📋 Raw Data Preview (first 100 rows)"):
             st.dataframe(df.head(100), use_container_width=True)
