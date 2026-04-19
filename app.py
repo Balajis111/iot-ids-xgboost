@@ -10,6 +10,7 @@ import numpy as np
 import shap
 import joblib
 import time
+import plotly.graph_objects as go
 
 from realtime_input import render_manual_input, generate_synthetic_flow, PROFILES
 from alert_priority  import compute_priority, render_triage_card, AlertQueue
@@ -46,7 +47,7 @@ if page == "📝 Manual Analysis":
 
     if X_row is not None:
         with st.spinner("Running XGBoost + SHAP analysis..."):
-            prob = model.predict_proba(X_row)[0][1]
+            prob       = model.predict_proba(X_row)[0][1]
             prediction = int(prob >= threshold)
             score, breakdown = compute_priority(model, explainer, X_row)
 
@@ -57,6 +58,55 @@ if page == "📝 Manual Analysis":
 
         st.markdown("---")
         render_triage_card(breakdown, X_row)
+
+        # ── SHAP Force Plot ───────────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("🔍 SHAP Force Plot — Why this prediction?")
+
+        shap_vals = explainer.shap_values(X_row)
+        if isinstance(shap_vals, list):
+            sv = shap_vals[1][0]
+        else:
+            sv = shap_vals[0]
+
+        feature_names = list(X_row.columns)
+        shap_pairs = sorted(
+            zip(feature_names, sv),
+            key=lambda x: abs(x[1]),
+            reverse=True
+        )[:15]
+
+        names   = [f for f, _ in shap_pairs]
+        values  = [v for _, v in shap_pairs]
+        colours = ["#FF2D55" if v > 0 else "#34C759" for v in values]
+        labels  = [f"+{v:.4f} → Attack" if v > 0 else f"{v:.4f} → Normal" for v in values]
+
+        fig_force = go.Figure(go.Bar(
+            x=values,
+            y=names,
+            orientation="h",
+            marker_color=colours,
+            text=labels,
+            textposition="outside",
+        ))
+        fig_force.update_layout(
+            title="Red = pushes toward Attack | Green = pushes toward Normal",
+            height=420,
+            margin=dict(l=0, r=180, t=40, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            xaxis=dict(
+                title="SHAP Value",
+                showgrid=True,
+                gridcolor="rgba(255,255,255,0.1)",
+                zeroline=True,
+                zerolinecolor="white",
+                zerolinewidth=1,
+            ),
+            yaxis=dict(showgrid=False),
+        )
+        st.plotly_chart(fig_force, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LIVE STREAM
@@ -137,98 +187,163 @@ elif page == "📈 Alert Queue":
         col3.metric("High",         len(df_q[df_q["severity"] == "HIGH"]))
         col4.metric("Avg Score",    f"{df_q['score'].mean():.1f}")
 
-    queue.render()
-    # ── Export PDF ────────────────────────────────────────────────────────────
-    if not df_q.empty and st.button("📄 Export PDF Report"):
-        from reportlab.lib.pagesizes import A4
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib import colors
-        from reportlab.lib.units import mm
-        import io
+    # ── Trend Chart ───────────────────────────────────────────────────────────
+    if not df_q.empty:
+        import plotly.graph_objects as go
 
-        buffer = io.BytesIO()
-        doc    = SimpleDocTemplate(buffer, pagesize=A4,
-                                   rightMargin=15*mm, leftMargin=15*mm,
-                                   topMargin=20*mm, bottomMargin=20*mm)
-        styles = getSampleStyleSheet()
-        story  = []
+        st.markdown("---")
+        st.subheader("📈 Alert Score Trend")
 
-        # Title
-        title_style = ParagraphStyle("title", parent=styles["Title"],
-                                     fontSize=18, textColor=colors.HexColor("#1a1a2e"),
-                                     spaceAfter=6)
-        story.append(Paragraph("IoT IDS — SOC Triage Report", title_style))
-        story.append(Paragraph(
-            f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            styles["Normal"]
+        df_trend = queue.to_dataframe().copy()
+        df_trend = df_trend.sort_values("timestamp").reset_index(drop=True)
+        df_trend["index"] = range(1, len(df_trend) + 1)
+
+        colour_map = {
+            "CRITICAL": "#FF2D55",
+            "HIGH":     "#FF9500",
+            "MEDIUM":   "#FFCC00",
+            "LOW":      "#34C759",
+        }
+        df_trend["colour"] = df_trend["severity"].map(colour_map)
+
+        fig_trend = go.Figure()
+
+        fig_trend.add_trace(go.Scatter(
+            x=df_trend["index"],
+            y=df_trend["score"],
+            mode="lines",
+            line=dict(color="#6C7BFF", width=2),
+            name="Priority Score",
         ))
-        story.append(Spacer(1, 8*mm))
 
-        # Summary metrics
-        total_a   = len(df_q)
-        critical  = len(df_q[df_q["severity"] == "CRITICAL"])
-        high      = len(df_q[df_q["severity"] == "HIGH"])
-        avg_score = df_q["score"].mean()
+        for sev, grp in df_trend.groupby("severity"):
+            fig_trend.add_trace(go.Scatter(
+                x=grp["index"],
+                y=grp["score"],
+                mode="markers",
+                marker=dict(color=colour_map.get(sev, "#aaa"), size=8),
+                name=sev,
+                hovertemplate=(
+                    "Flow: %{customdata[0]}<br>"
+                    "Score: %{y:.1f}<br>"
+                    "Severity: " + sev + "<br>"
+                    "Confidence: %{customdata[1]}<extra></extra>"
+                ),
+                customdata=grp[["id", "confidence"]].values,
+            ))
 
-        summary_data = [
-            ["Metric", "Value"],
-            ["Total Alerts",    str(total_a)],
-            ["Critical",        str(critical)],
-            ["High",            str(high)],
-            ["Average Score",   f"{avg_score:.1f}"],
-        ]
-        summary_table = Table(summary_data, colWidths=[80*mm, 80*mm])
-        summary_table.setStyle(TableStyle([
-            ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#1a1a2e")),
-            ("TEXTCOLOR",   (0,0), (-1,0), colors.white),
-            ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
-            ("FONTSIZE",    (0,0), (-1,-1), 10),
-            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#f5f5f5"), colors.white]),
-            ("GRID",        (0,0), (-1,-1), 0.5, colors.grey),
-            ("PADDING",     (0,0), (-1,-1), 6),
-        ]))
-        story.append(summary_table)
-        story.append(Spacer(1, 8*mm))
+        fig_trend.add_hline(y=80, line_dash="dash", line_color="#FF2D55",
+                            annotation_text="CRITICAL", annotation_position="right")
+        fig_trend.add_hline(y=60, line_dash="dash", line_color="#FF9500",
+                            annotation_text="HIGH", annotation_position="right")
+        fig_trend.add_hline(y=40, line_dash="dash", line_color="#FFCC00",
+                            annotation_text="MEDIUM", annotation_position="right")
 
-        # Alert table
-        story.append(Paragraph("Alert Queue — Sorted by Priority Score", styles["Heading2"]))
-        story.append(Spacer(1, 4*mm))
-
-        table_data = [["ID", "Timestamp", "Prediction", "Severity", "Score", "Confidence", "Top Feature"]]
-        for _, row in df_q.iterrows():
-            table_data.append([
-                str(row["id"]),
-                str(row["timestamp"])[:19],
-                str(row["prediction"]),
-                str(row["severity"]),
-                str(row["score"]),
-                str(row["confidence"]),
-                str(row["top_feature"]),
-            ])
-
-        col_widths = [20*mm, 40*mm, 25*mm, 22*mm, 18*mm, 22*mm, 25*mm]
-        alert_table = Table(table_data, colWidths=col_widths, repeatRows=1)
-        alert_table.setStyle(TableStyle([
-            ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#1a1a2e")),
-            ("TEXTCOLOR",   (0,0), (-1,0), colors.white),
-            ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
-            ("FONTSIZE",    (0,0), (-1,-1), 8),
-            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#fff0f0"), colors.white]),
-            ("GRID",        (0,0), (-1,-1), 0.3, colors.grey),
-            ("PADDING",     (0,0), (-1,-1), 4),
-        ]))
-        story.append(alert_table)
-
-        doc.build(story)
-        buffer.seek(0)
-
-        st.download_button(
-            label="⬇️ Download PDF Report",
-            data=buffer,
-            file_name=f"soc_triage_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-            mime="application/pdf",
+        fig_trend.update_layout(
+            height=350,
+            margin=dict(l=0, r=60, t=20, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            xaxis=dict(title="Flow #", showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+            yaxis=dict(title="Priority Score", range=[0, 100],
+                       showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+            legend=dict(bgcolor="rgba(0,0,0,0)"),
         )
+        st.plotly_chart(fig_trend, use_container_width=True)
+        st.markdown("---")
+
+    queue.render()
+
+    # ── Export PDF ────────────────────────────────────────────────────────────
+    if not df_q.empty:
+        if st.button("📄 Export PDF Report"):
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import mm
+            import io
+
+            buffer = io.BytesIO()
+            doc    = SimpleDocTemplate(buffer, pagesize=A4,
+                                       rightMargin=15*mm, leftMargin=15*mm,
+                                       topMargin=20*mm, bottomMargin=20*mm)
+            styles = getSampleStyleSheet()
+            story  = []
+
+            title_style = ParagraphStyle("title", parent=styles["Title"], fontSize=18, spaceAfter=6)
+            story.append(Paragraph("IoT IDS - SOC Triage Report", title_style))
+            story.append(Paragraph(
+                f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                styles["Normal"]
+            ))
+            story.append(Spacer(1, 8*mm))
+
+            total_a   = len(df_q)
+            critical  = len(df_q[df_q["severity"] == "CRITICAL"])
+            high      = len(df_q[df_q["severity"] == "HIGH"])
+            avg_score = df_q["score"].mean()
+
+            summary_data = [
+                ["Metric",        "Value"],
+                ["Total Alerts",  str(total_a)],
+                ["Critical",      str(critical)],
+                ["High",          str(high)],
+                ["Average Score", f"{avg_score:.1f}"],
+            ]
+            summary_table = Table(summary_data, colWidths=[80*mm, 80*mm])
+            summary_table.setStyle(TableStyle([
+                ("BACKGROUND",     (0,0), (-1,0), colors.HexColor("#1a1a2e")),
+                ("TEXTCOLOR",      (0,0), (-1,0), colors.white),
+                ("FONTNAME",       (0,0), (-1,0), "Helvetica-Bold"),
+                ("FONTSIZE",       (0,0), (-1,-1), 10),
+                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#f5f5f5"), colors.white]),
+                ("GRID",           (0,0), (-1,-1), 0.5, colors.grey),
+                ("PADDING",        (0,0), (-1,-1), 6),
+            ]))
+            story.append(summary_table)
+            story.append(Spacer(1, 8*mm))
+
+            story.append(Paragraph("Alert Queue - Sorted by Priority Score", styles["Heading2"]))
+            story.append(Spacer(1, 4*mm))
+
+            table_data = [["ID", "Timestamp", "Prediction", "Severity", "Score", "Confidence", "Top Feature"]]
+            for _, row in df_q.iterrows():
+                table_data.append([
+                    str(row["id"]),
+                    str(row["timestamp"])[:19],
+                    str(row["prediction"]),
+                    str(row["severity"]),
+                    str(row["score"]),
+                    str(row["confidence"]),
+                    str(row["top_feature"]),
+                ])
+
+            col_widths  = [20*mm, 40*mm, 25*mm, 22*mm, 18*mm, 22*mm, 25*mm]
+            alert_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+            alert_table.setStyle(TableStyle([
+                ("BACKGROUND",     (0,0), (-1,0), colors.HexColor("#1a1a2e")),
+                ("TEXTCOLOR",      (0,0), (-1,0), colors.white),
+                ("FONTNAME",       (0,0), (-1,0), "Helvetica-Bold"),
+                ("FONTSIZE",       (0,0), (-1,-1), 8),
+                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#fff0f0"), colors.white]),
+                ("GRID",           (0,0), (-1,-1), 0.3, colors.grey),
+                ("PADDING",        (0,0), (-1,-1), 4),
+            ]))
+            story.append(alert_table)
+
+            doc.build(story)
+            buffer.seek(0)
+            st.session_state["pdf_buffer"] = buffer.getvalue()
+
+        if "pdf_buffer" in st.session_state:
+            st.download_button(
+                label="⬇️ Download PDF Report",
+                data=st.session_state["pdf_buffer"],
+                file_name=f"soc_triage_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+            )
 
     if st.button("🗑️ Clear Queue"):
         st.session_state.alert_queue = AlertQueue()
@@ -244,7 +359,6 @@ elif page == "📊 Dashboard":
 
     if uploaded_file is not None:
         import plotly.express as px
-        import plotly.graph_objects as go
 
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
@@ -384,28 +498,27 @@ elif page == "📊 Dashboard":
                 st.plotly_chart(fig_dist, use_container_width=True)
 
         st.markdown("---")
+
         # ── Confusion Matrix ──────────────────────────────────────────────────
-        st.markdown("---")
         st.subheader("Model Performance on Uploaded Data")
-        drop_cols = [c for c in ["attack_cat"] if c in df.columns]
         if "label" in df.columns:
             from realtime_input import FEATURES
             import matplotlib.pyplot as plt
             from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
-            X_eval = df.drop(columns=[c for c in ["label","attack_cat"] if c in df.columns])
-            X_eval = X_eval[[f for f in FEATURES if f in X_eval.columns]]
-            le_eval = joblib.load("models/label_encoder.pkl")
+            X_eval    = df.drop(columns=[c for c in ["label", "attack_cat"] if c in df.columns])
+            X_eval    = X_eval[[f for f in FEATURES if f in X_eval.columns]]
+            le_eval   = joblib.load("models/label_encoder.pkl")
             cat_cols_eval = X_eval.select_dtypes(include=["category", "object"]).columns.tolist()
             for col in cat_cols_eval:
                 X_eval[col] = X_eval[col].astype(str).map(
                     lambda x: le_eval.transform([x])[0] if x in le_eval.classes_ else -1
                 )
-            X_eval = X_eval.astype(float)
-            scaler_eval = joblib.load("models/scaler.pkl")
-            X_eval = pd.DataFrame(scaler_eval.transform(X_eval), columns=X_eval.columns)
+            X_eval        = X_eval.astype(float)
+            scaler_eval   = joblib.load("models/scaler.pkl")
+            X_eval        = pd.DataFrame(scaler_eval.transform(X_eval), columns=X_eval.columns)
 
-            y_true = df["label"].values
+            y_true      = df["label"].values
             y_prob_eval = model.predict_proba(X_eval)[:,1]
             y_pred_eval = (y_prob_eval >= threshold).astype(int)
 
@@ -423,18 +536,20 @@ elif page == "📊 Dashboard":
             m4.metric("F1 Score",  f"{f1*100:.1f}%")
             m5.metric("FP Rate",   f"{fpr*100:.1f}%")
 
-            cm = confusion_matrix(y_true, y_pred_eval)
-            fig_cm, ax_cm = plt.subplots(figsize=(5,4))
-            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Normal","Attack"])
+            cm      = confusion_matrix(y_true, y_pred_eval)
+            fig_cm, ax_cm = plt.subplots(figsize=(5, 4))
+            disp    = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Normal", "Attack"])
             disp.plot(ax=ax_cm, colorbar=False, cmap="Blues")
             ax_cm.set_facecolor("#0e1117")
             fig_cm.patch.set_facecolor("#0e1117")
-            plt.title("Confusion Matrix (Threshold 0.7)", color="white")
+            plt.title("Confusion Matrix (Threshold 0.805)", color="white")
             plt.tick_params(colors="white")
             ax_cm.xaxis.label.set_color("white")
             ax_cm.yaxis.label.set_color("white")
             st.pyplot(fig_cm)
             plt.close()
+
+        st.markdown("---")
 
         with st.expander("📋 Raw Data Preview (first 100 rows)"):
             st.dataframe(df.head(100), use_container_width=True)
@@ -493,7 +608,7 @@ elif page == "🔬 Model Insights":
         st.subheader("Feature Importance Ranking")
         mean_shap     = np.abs(shap_values).mean(axis=0)
         importance_df = pd.DataFrame({
-            "Feature":    X_sample.columns,
+            "Feature":     X_sample.columns,
             "Mean |SHAP|": mean_shap,
         }).sort_values("Mean |SHAP|", ascending=False).reset_index(drop=True)
         importance_df.index += 1
@@ -501,7 +616,8 @@ elif page == "🔬 Model Insights":
 
     else:
         st.info("👆 Upload your dataset above to generate SHAP explainability plots.")
-        # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ATTACK TYPE DETECTOR
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "🎯 Attack Type Detector":
@@ -517,28 +633,26 @@ elif page == "🎯 Attack Type Detector":
 
     mc_model, mc_scaler, mc_le = load_multiclass()
 
-    # ── Attack type colours ───────────────────────────────────────────────────
     ATTACK_COLOURS = {
-        "Normal":          "#34C759",
-        "DoS":             "#FF2D55",
-        "Reconnaissance":  "#FF9500",
-        "Exploits":        "#FF3B30",
-        "Fuzzers":         "#AF52DE",
-        "Backdoor":        "#FF2D55",
-        "Analysis":        "#5AC8FA",
-        "Shellcode":       "#FF6B6B",
-        "Worms":           "#FF0000",
-        "Generic":         "#FFD60A",
+        "Normal":         "#34C759",
+        "DoS":            "#FF2D55",
+        "Reconnaissance": "#FF9500",
+        "Exploits":       "#FF3B30",
+        "Fuzzers":        "#AF52DE",
+        "Backdoor":       "#FF2D55",
+        "Analysis":       "#5AC8FA",
+        "Shellcode":      "#FF6B6B",
+        "Worms":          "#FF0000",
+        "Generic":        "#FFD60A",
     }
 
     tab1, tab2 = st.tabs(["📝 Single Flow", "📂 Batch Detection"])
 
-    # ── Single flow ───────────────────────────────────────────────────────────
     with tab1:
         X_row = render_manual_input()
 
         if X_row is not None:
-            X_scaled = mc_scaler.transform(X_row)
+            X_scaled      = mc_scaler.transform(X_row)
             pred_encoded  = mc_model.predict(X_scaled)[0]
             pred_proba    = mc_model.predict_proba(X_scaled)[0]
             attack_type   = mc_le.inverse_transform([pred_encoded])[0]
@@ -554,19 +668,14 @@ elif page == "🎯 Attack Type Detector":
                     padding: 20px;
                     margin: 16px 0;
                 ">
-                    <h2 style="color:{colour}; margin:0">
-                        Detected: {attack_type}
-                    </h2>
-                    <p style="color:#aaa; margin:4px 0 0 0">
-                        Confidence: {confidence:.1f}%
-                    </p>
+                    <h2 style="color:{colour}; margin:0">Detected: {attack_type}</h2>
+                    <p style="color:#aaa; margin:4px 0 0 0">Confidence: {confidence:.1f}%</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-            # Probability bar chart
-            import plotly.graph_objects as go
+            import plotly.express as px
             classes = mc_le.classes_
             fig = go.Figure(go.Bar(
                 x=pred_proba * 100,
@@ -586,7 +695,6 @@ elif page == "🎯 Attack Type Detector":
             )
             st.plotly_chart(fig, use_container_width=True)
 
-    # ── Batch detection ───────────────────────────────────────────────────────
     with tab2:
         st.subheader("Upload dataset for batch attack type detection")
         batch_file = st.file_uploader("Upload CSV or Parquet", type=["csv", "parquet"], key="batch_mc")
@@ -608,13 +716,12 @@ elif page == "🎯 Attack Type Detector":
                 X_batch[col] = X_batch[col].astype(str).astype("category").cat.codes
             X_batch = X_batch.astype(float)
 
-            X_batch_scaled   = mc_scaler.transform(X_batch)
-            preds_encoded    = mc_model.predict(X_batch_scaled)
-            preds_labels     = mc_le.inverse_transform(preds_encoded)
+            X_batch_scaled = mc_scaler.transform(X_batch)
+            preds_encoded  = mc_model.predict(X_batch_scaled)
+            preds_labels   = mc_le.inverse_transform(preds_encoded)
 
             df_batch["predicted_attack_type"] = preds_labels
 
-            # Summary chart
             type_counts = pd.Series(preds_labels).value_counts().reset_index()
             type_counts.columns = ["Attack Type", "Count"]
 
