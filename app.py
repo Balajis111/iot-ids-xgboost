@@ -32,7 +32,7 @@ model, explainer, threshold = load_model()
 st.sidebar.title("🛡️ IoT IDS · SOC View")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "📝 Manual Analysis", "⚡ Live Stream", "📈 Alert Queue", "🔬 Model Insights"],
+    ["📊 Dashboard", "📝 Manual Analysis", "⚡ Live Stream", "📈 Alert Queue", "🔬 Model Insights", "🎯 Attack Type Detector"],
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -410,3 +410,161 @@ elif page == "🔬 Model Insights":
 
     else:
         st.info("👆 Upload your dataset above to generate SHAP explainability plots.")
+        # ─────────────────────────────────────────────────────────────────────────────
+# ATTACK TYPE DETECTOR
+# ─────────────────────────────────────────────────────────────────────────────
+elif page == "🎯 Attack Type Detector":
+    st.title("🎯 Attack Type Detector")
+    st.caption("Multiclass XGBoost model — identifies specific attack category from network flow.")
+
+    @st.cache_resource
+    def load_multiclass():
+        mc_model  = joblib.load("models/xgboost_multiclass.pkl")
+        mc_scaler = joblib.load("models/scaler_multiclass.pkl")
+        mc_le     = joblib.load("models/label_encoder_target.pkl")
+        return mc_model, mc_scaler, mc_le
+
+    mc_model, mc_scaler, mc_le = load_multiclass()
+
+    # ── Attack type colours ───────────────────────────────────────────────────
+    ATTACK_COLOURS = {
+        "Normal":          "#34C759",
+        "DoS":             "#FF2D55",
+        "Reconnaissance":  "#FF9500",
+        "Exploits":        "#FF3B30",
+        "Fuzzers":         "#AF52DE",
+        "Backdoor":        "#FF2D55",
+        "Analysis":        "#5AC8FA",
+        "Shellcode":       "#FF6B6B",
+        "Worms":           "#FF0000",
+        "Generic":         "#FFD60A",
+    }
+
+    tab1, tab2 = st.tabs(["📝 Single Flow", "📂 Batch Detection"])
+
+    # ── Single flow ───────────────────────────────────────────────────────────
+    with tab1:
+        X_row = render_manual_input()
+
+        if X_row is not None:
+            X_scaled = mc_scaler.transform(X_row)
+            pred_encoded  = mc_model.predict(X_scaled)[0]
+            pred_proba    = mc_model.predict_proba(X_scaled)[0]
+            attack_type   = mc_le.inverse_transform([pred_encoded])[0]
+            confidence    = pred_proba[pred_encoded] * 100
+            colour        = ATTACK_COLOURS.get(attack_type, "#6C7BFF")
+
+            st.markdown(
+                f"""
+                <div style="
+                    border-left: 6px solid {colour};
+                    background: rgba(255,255,255,0.04);
+                    border-radius: 8px;
+                    padding: 20px;
+                    margin: 16px 0;
+                ">
+                    <h2 style="color:{colour}; margin:0">
+                        Detected: {attack_type}
+                    </h2>
+                    <p style="color:#aaa; margin:4px 0 0 0">
+                        Confidence: {confidence:.1f}%
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Probability bar chart
+            import plotly.graph_objects as go
+            classes = mc_le.classes_
+            fig = go.Figure(go.Bar(
+                x=pred_proba * 100,
+                y=classes,
+                orientation="h",
+                marker_color=[ATTACK_COLOURS.get(c, "#6C7BFF") for c in classes],
+            ))
+            fig.update_layout(
+                title="Probability per Attack Type",
+                height=350,
+                margin=dict(l=0, r=20, t=40, b=10),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="white",
+                xaxis=dict(title="Probability (%)", showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+                yaxis=dict(showgrid=False),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ── Batch detection ───────────────────────────────────────────────────────
+    with tab2:
+        st.subheader("Upload dataset for batch attack type detection")
+        batch_file = st.file_uploader("Upload CSV or Parquet", type=["csv", "parquet"], key="batch_mc")
+
+        if batch_file is not None:
+            import plotly.express as px
+
+            if batch_file.name.endswith(".csv"):
+                df_batch = pd.read_csv(batch_file)
+            else:
+                df_batch = pd.read_parquet(batch_file)
+
+            from realtime_input import FEATURES
+            drop_cols = [c for c in ["label", "attack_cat"] if c in df_batch.columns]
+            X_batch   = df_batch.drop(columns=drop_cols)
+            X_batch   = X_batch[[f for f in FEATURES if f in X_batch.columns]]
+
+            for col in X_batch.select_dtypes(include=["category", "object"]).columns:
+                X_batch[col] = X_batch[col].astype(str).astype("category").cat.codes
+            X_batch = X_batch.astype(float)
+
+            X_batch_scaled   = mc_scaler.transform(X_batch)
+            preds_encoded    = mc_model.predict(X_batch_scaled)
+            preds_labels     = mc_le.inverse_transform(preds_encoded)
+
+            df_batch["predicted_attack_type"] = preds_labels
+
+            # Summary chart
+            type_counts = pd.Series(preds_labels).value_counts().reset_index()
+            type_counts.columns = ["Attack Type", "Count"]
+
+            st.success(f"✅ Analysed {len(df_batch):,} flows")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                fig2 = px.pie(
+                    type_counts, names="Attack Type", values="Count",
+                    color="Attack Type",
+                    color_discrete_map=ATTACK_COLOURS,
+                    hole=0.4,
+                )
+                fig2.update_layout(
+                    height=350,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font_color="white",
+                    legend=dict(bgcolor="rgba(0,0,0,0)"),
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+            with col2:
+                fig3 = px.bar(
+                    type_counts, x="Attack Type", y="Count",
+                    color="Attack Type",
+                    color_discrete_map=ATTACK_COLOURS,
+                )
+                fig3.update_layout(
+                    height=350,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white",
+                    showlegend=False,
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+                )
+                st.plotly_chart(fig3, use_container_width=True)
+
+            with st.expander("📋 Full Predictions Table"):
+                st.dataframe(
+                    df_batch[["predicted_attack_type"] + [f for f in FEATURES if f in df_batch.columns]].head(500),
+                    use_container_width=True
+                )
