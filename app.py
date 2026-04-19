@@ -138,6 +138,97 @@ elif page == "📈 Alert Queue":
         col4.metric("Avg Score",    f"{df_q['score'].mean():.1f}")
 
     queue.render()
+    # ── Export PDF ────────────────────────────────────────────────────────────
+    if not df_q.empty and st.button("📄 Export PDF Report"):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import mm
+        import io
+
+        buffer = io.BytesIO()
+        doc    = SimpleDocTemplate(buffer, pagesize=A4,
+                                   rightMargin=15*mm, leftMargin=15*mm,
+                                   topMargin=20*mm, bottomMargin=20*mm)
+        styles = getSampleStyleSheet()
+        story  = []
+
+        # Title
+        title_style = ParagraphStyle("title", parent=styles["Title"],
+                                     fontSize=18, textColor=colors.HexColor("#1a1a2e"),
+                                     spaceAfter=6)
+        story.append(Paragraph("IoT IDS — SOC Triage Report", title_style))
+        story.append(Paragraph(
+            f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            styles["Normal"]
+        ))
+        story.append(Spacer(1, 8*mm))
+
+        # Summary metrics
+        total_a   = len(df_q)
+        critical  = len(df_q[df_q["severity"] == "CRITICAL"])
+        high      = len(df_q[df_q["severity"] == "HIGH"])
+        avg_score = df_q["score"].mean()
+
+        summary_data = [
+            ["Metric", "Value"],
+            ["Total Alerts",    str(total_a)],
+            ["Critical",        str(critical)],
+            ["High",            str(high)],
+            ["Average Score",   f"{avg_score:.1f}"],
+        ]
+        summary_table = Table(summary_data, colWidths=[80*mm, 80*mm])
+        summary_table.setStyle(TableStyle([
+            ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#1a1a2e")),
+            ("TEXTCOLOR",   (0,0), (-1,0), colors.white),
+            ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",    (0,0), (-1,-1), 10),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#f5f5f5"), colors.white]),
+            ("GRID",        (0,0), (-1,-1), 0.5, colors.grey),
+            ("PADDING",     (0,0), (-1,-1), 6),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 8*mm))
+
+        # Alert table
+        story.append(Paragraph("Alert Queue — Sorted by Priority Score", styles["Heading2"]))
+        story.append(Spacer(1, 4*mm))
+
+        table_data = [["ID", "Timestamp", "Prediction", "Severity", "Score", "Confidence", "Top Feature"]]
+        for _, row in df_q.iterrows():
+            table_data.append([
+                str(row["id"]),
+                str(row["timestamp"])[:19],
+                str(row["prediction"]),
+                str(row["severity"]),
+                str(row["score"]),
+                str(row["confidence"]),
+                str(row["top_feature"]),
+            ])
+
+        col_widths = [20*mm, 40*mm, 25*mm, 22*mm, 18*mm, 22*mm, 25*mm]
+        alert_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+        alert_table.setStyle(TableStyle([
+            ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#1a1a2e")),
+            ("TEXTCOLOR",   (0,0), (-1,0), colors.white),
+            ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",    (0,0), (-1,-1), 8),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#fff0f0"), colors.white]),
+            ("GRID",        (0,0), (-1,-1), 0.3, colors.grey),
+            ("PADDING",     (0,0), (-1,-1), 4),
+        ]))
+        story.append(alert_table)
+
+        doc.build(story)
+        buffer.seek(0)
+
+        st.download_button(
+            label="⬇️ Download PDF Report",
+            data=buffer,
+            file_name=f"soc_triage_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf",
+        )
 
     if st.button("🗑️ Clear Queue"):
         st.session_state.alert_queue = AlertQueue()
