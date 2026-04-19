@@ -1,50 +1,34 @@
 """
-app.py  (updated)
------------------
+app.py
+------
 Lightweight Explainable IDS for IoT Devices
-Integrates:
-  - Real-time / manual flow input  (realtime_input.py)
-  - SHAP-weighted alert priority    (alert_priority.py)
-
-Drop-in additions to your existing app — the marked sections
-show exactly where new code plugs in.
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import shap
-import xgboost as xgb
 import joblib
 import time
 
-# NEW imports
 from realtime_input import render_manual_input, generate_synthetic_flow, PROFILES
 from alert_priority  import compute_priority, render_triage_card, AlertQueue
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="IoT IDS – SOC Dashboard",
     page_icon="🛡️",
     layout="wide",
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LOAD MODEL + EXPLAINER  (your existing code, unchanged)
-# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_model():
-    model = joblib.load("models/xgboost_ids.pkl")    # your trained model
+    model     = joblib.load("models/xgboost_ids.pkl")
     explainer = shap.TreeExplainer(model)
-    return model, explainer
+    threshold = joblib.load("models/threshold.pkl")
+    return model, explainer, threshold
 
-model, explainer = load_model()
+model, explainer, threshold = load_model()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────────────────────────────────────
 st.sidebar.title("🛡️ IoT IDS · SOC View")
 page = st.sidebar.radio(
     "Navigation",
@@ -52,7 +36,7 @@ page = st.sidebar.radio(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: MANUAL ANALYSIS  ← NEW
+# MANUAL ANALYSIS
 # ─────────────────────────────────────────────────────────────────────────────
 if page == "📝 Manual Analysis":
     st.title("Manual Flow Analysis")
@@ -62,7 +46,8 @@ if page == "📝 Manual Analysis":
 
     if X_row is not None:
         with st.spinner("Running XGBoost + SHAP analysis..."):
-            prediction = int(model.predict(X_row)[0])
+            prob = model.predict_proba(X_row)[0][1]
+            prediction = int(prob >= threshold)
             score, breakdown = compute_priority(model, explainer, X_row)
 
         if prediction == 0:
@@ -73,9 +58,8 @@ if page == "📝 Manual Analysis":
         st.markdown("---")
         render_triage_card(breakdown, X_row)
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: LIVE STREAM  ← NEW
+# LIVE STREAM
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "⚡ Live Stream":
     st.title("⚡ Simulated Live Flow Stream")
@@ -93,28 +77,27 @@ elif page == "⚡ Live Stream":
             list(PROFILES.keys()),
             default=["Normal", "DoS", "Scan"],
         )
-        interval   = st.slider("Interval between flows (s)", 0.5, 5.0, 1.5, 0.5)
-        n_flows    = st.number_input("Number of flows to generate", 1, 200, 20)
+        interval          = st.slider("Interval between flows (s)", 0.5, 5.0, 1.5, 0.5)
+        n_flows           = st.number_input("Number of flows to generate", 1, 200, 20)
         show_only_attacks = st.checkbox("Show triage card only for attacks", value=True)
-        run = st.button("▶️  Start Stream", type="primary")
+        run               = st.button("▶️  Start Stream", type="primary")
 
-    # Initialise alert queue in session state
     if "alert_queue" not in st.session_state:
         st.session_state.alert_queue = AlertQueue(max_size=200)
 
     if run and attack_mix:
-        queue = st.session_state.alert_queue
+        queue       = st.session_state.alert_queue
         placeholder = col_r.empty()
-        progress = st.progress(0)
-        status   = st.empty()
+        progress    = st.progress(0)
+        status      = st.empty()
 
         for i in range(int(n_flows)):
             attack_type = np.random.choice(attack_mix)
-            X_row = generate_synthetic_flow(attack_type)
+            X_row       = generate_synthetic_flow(attack_type)
 
-            with st.spinner(""):
-                prediction = int(model.predict(X_row)[0])
-                score, breakdown = compute_priority(model, explainer, X_row)
+            prob       = model.predict_proba(X_row)[0][1]
+            prediction = int(prob >= threshold)
+            score, breakdown = compute_priority(model, explainer, X_row)
 
             flow_id = f"F{i+1:04d}"
             queue.add(flow_id, X_row, prediction, breakdown)
@@ -134,9 +117,8 @@ elif page == "⚡ Live Stream":
 
         st.success(f"✅ Stream complete. {int(n_flows)} flows analysed.")
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: ALERT QUEUE  ← NEW
+# ALERT QUEUE
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "📈 Alert Queue":
     st.title("📈 Alert Priority Queue")
@@ -150,10 +132,10 @@ elif page == "📈 Alert Queue":
     col1, col2, col3, col4 = st.columns(4)
     df_q = queue.to_dataframe()
     if not df_q.empty:
-        col1.metric("Total Alerts",   len(df_q))
-        col2.metric("Critical",       len(df_q[df_q["severity"] == "CRITICAL"]))
-        col3.metric("High",           len(df_q[df_q["severity"] == "HIGH"]))
-        col4.metric("Avg Score",      f"{df_q['score'].mean():.1f}")
+        col1.metric("Total Alerts", len(df_q))
+        col2.metric("Critical",     len(df_q[df_q["severity"] == "CRITICAL"]))
+        col3.metric("High",         len(df_q[df_q["severity"] == "HIGH"]))
+        col4.metric("Avg Score",    f"{df_q['score'].mean():.1f}")
 
     queue.render()
 
@@ -161,9 +143,8 @@ elif page == "📈 Alert Queue":
         st.session_state.alert_queue = AlertQueue()
         st.rerun()
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: DASHBOARD  (your existing dashboard code goes here, unchanged)
+# DASHBOARD
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "📊 Dashboard":
     st.title("📊 IDS Overview Dashboard")
@@ -184,7 +165,6 @@ elif page == "📊 Dashboard":
         normal     = total - attacks
         attack_pct = (attacks / total) * 100
 
-        # ── Metric cards ──────────────────────────────────────────────────────
         st.markdown("""
         <style>
         .metric-card {
@@ -207,7 +187,6 @@ elif page == "📊 Dashboard":
 
         st.markdown("---")
 
-        # ── Donut + Attack categories ─────────────────────────────────────────
         col_a, col_b = st.columns([1, 2])
 
         with col_a:
@@ -264,15 +243,14 @@ elif page == "📊 Dashboard":
 
         st.markdown("---")
 
-        # ── Top features by variance + Rate distribution ───────────────────────
         col_c, col_d = st.columns(2)
 
         with col_c:
             st.subheader("Top 10 Features by Variance")
             from realtime_input import FEATURES
-            num_cols = [f for f in FEATURES if f in df.columns]
+            num_cols  = [f for f in FEATURES if f in df.columns]
             variances = df[num_cols].select_dtypes(include="number").var().sort_values(ascending=False).head(10)
-            fig_var = px.bar(
+            fig_var   = px.bar(
                 x=variances.values,
                 y=variances.index,
                 orientation="h",
@@ -316,14 +294,14 @@ elif page == "📊 Dashboard":
 
         st.markdown("---")
 
-        # ── Raw data preview ──────────────────────────────────────────────────
         with st.expander("📋 Raw Data Preview (first 100 rows)"):
             st.dataframe(df.head(100), use_container_width=True)
 
     else:
         st.info("👆 Upload your UNSW-NB15 dataset above to see the overview.")
+
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: MODEL INSIGHTS  (your existing SHAP global plots, unchanged)
+# MODEL INSIGHTS
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "🔬 Model Insights":
     st.title("🔬 Model Explainability")
@@ -332,36 +310,30 @@ elif page == "🔬 Model Insights":
     uploaded_file = st.file_uploader("Upload your dataset to generate SHAP plots (CSV or Parquet)", type=["csv", "parquet"])
 
     if uploaded_file is not None:
-        import shap
         import matplotlib.pyplot as plt
 
-        # Load data
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_parquet(uploaded_file)
 
-        # Drop non-feature columns
         drop_cols = [c for c in ["label", "attack_cat"] if c in df.columns]
         X = df.drop(columns=drop_cols)
 
-        # Keep only model features
         from realtime_input import FEATURES
         X = X[[f for f in FEATURES if f in X.columns]]
 
-        # Sample for speed
         sample_size = min(500, len(X))
-        X_sample = X.sample(sample_size, random_state=42)
-        # Encode categorical columns
-        for col in X_sample.select_dtypes(include=['category', 'object']).columns:
-            X_sample[col] = X_sample[col].astype(str).astype('category').cat.codes
+        X_sample    = X.sample(sample_size, random_state=42)
+
+        for col in X_sample.select_dtypes(include=["category", "object"]).columns:
+            X_sample[col] = X_sample[col].astype(str).astype("category").cat.codes
 
         with st.spinner("Generating SHAP values... (takes 30-60 seconds)"):
             shap_values = explainer.shap_values(X_sample)
 
         st.success(f"✅ SHAP values computed on {sample_size} samples")
 
-        # ── Feature importance bar plot ───────────────────────────────────────
         st.subheader("Top Features by Mean |SHAP|")
         fig1, ax1 = plt.subplots(figsize=(8, 5))
         shap.summary_plot(shap_values, X_sample, plot_type="bar", show=False)
@@ -369,7 +341,6 @@ elif page == "🔬 Model Insights":
         st.pyplot(fig1)
         plt.close()
 
-        # ── Beeswarm / dot plot ───────────────────────────────────────────────
         st.subheader("SHAP Value Distribution (Beeswarm)")
         fig2, ax2 = plt.subplots(figsize=(8, 6))
         shap.summary_plot(shap_values, X_sample, show=False)
@@ -377,12 +348,10 @@ elif page == "🔬 Model Insights":
         st.pyplot(fig2)
         plt.close()
 
-        # ── Top feature names table ───────────────────────────────────────────
         st.subheader("Feature Importance Ranking")
-        import numpy as np
-        mean_shap = np.abs(shap_values).mean(axis=0)
+        mean_shap     = np.abs(shap_values).mean(axis=0)
         importance_df = pd.DataFrame({
-            "Feature": X_sample.columns,
+            "Feature":    X_sample.columns,
             "Mean |SHAP|": mean_shap,
         }).sort_values("Mean |SHAP|", ascending=False).reset_index(drop=True)
         importance_df.index += 1
