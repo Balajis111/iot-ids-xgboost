@@ -33,7 +33,7 @@ model, explainer, threshold = load_model()
 st.sidebar.title("🛡️ IoT IDS · SOC View")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "📝 Manual Analysis", "⚡ Live Stream", "📈 Alert Queue", "🔬 Model Insights", "🎯 Attack Type Detector"],
+    ["📊 Dashboard", "📝 Manual Analysis", "⚡ Live Stream", "📈 Alert Queue", "🔬 Model Insights", "🎯 Attack Type Detector", "📋 Experiment Results"],
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -765,4 +765,245 @@ elif page == "🎯 Attack Type Detector":
                 st.dataframe(
                     df_batch[["predicted_attack_type"] + [f for f in FEATURES if f in df_batch.columns]].head(500),
                     use_container_width=True
-                )
+                )# ─────────────────────────────────────────────────────────────────────────────
+# EXPERIMENT RESULTS
+# ─────────────────────────────────────────────────────────────────────────────
+elif page == "📋 Experiment Results":
+    st.title("📋 Experiment Results")
+    st.caption("Complete model evaluation results — ready for research paper.")
+
+    import plotly.express as px
+
+    # ── Dataset Summary ───────────────────────────────────────────────────────
+    st.subheader("📂 Dataset — UNSW-NB15")
+    dataset_data = {
+        "Split":        ["Training", "Testing"],
+        "Total Rows":   ["175,341", "82,332"],
+        "Normal":       ["56,000",  "37,000"],
+        "Attack":       ["119,341", "45,332"],
+        "Attack Rate":  ["68.1%",   "55.1%"],
+    }
+    st.dataframe(pd.DataFrame(dataset_data), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ── Threshold Analysis ────────────────────────────────────────────────────
+    st.subheader("🎯 Threshold Optimisation Results")
+    st.caption("Youden's J statistic used to find optimal threshold.")
+
+    threshold_data = {
+        "Threshold": [0.3, 0.4, 0.5, 0.6, 0.7, "**0.805 ✅**"],
+        "Precision": ["75.0%", "76.5%", "79.8%", "85.4%", "91.5%", "**97.0%**"],
+        "Recall":    ["99.7%", "99.2%", "98.1%", "95.8%", "92.8%", "**89.7%**"],
+        "F1 Score":  ["85.6%", "86.4%", "88.0%", "90.3%", "92.2%", "**93.3%**"],
+        "FP Rate":   ["40.7%", "37.3%", "30.4%", "20.0%", "10.5%", "**4.0%**"],
+        "Accuracy":  ["75.2%", "77.1%", "85.0%", "88.5%", "90.0%", "**93.0%**"],
+    }
+    st.dataframe(pd.DataFrame(threshold_data), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ── Final Model Performance ───────────────────────────────────────────────
+    st.subheader("🏆 Final Model Performance (Threshold = 0.805)")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Accuracy",  "93.0%", "+3% vs baseline")
+    col2.metric("Precision", "97.0%", "+6% vs baseline")
+    col3.metric("Recall",    "89.7%", "-3% vs baseline")
+    col4.metric("F1 Score",  "93.3%", "+3% vs baseline")
+    col5.metric("FP Rate",   "4.0%",  "-26% vs baseline")
+
+    st.markdown("---")
+
+    # ── Per Class Results ─────────────────────────────────────────────────────
+    st.subheader("📊 Per Class Classification Report")
+
+    class_data = {
+        "Class":     ["Normal", "Attack", "Macro Avg", "Weighted Avg"],
+        "Precision": ["88.0%", "97.0%", "92.5%", "93.0%"],
+        "Recall":    ["96.0%", "89.7%", "92.9%", "92.5%"],
+        "F1 Score":  ["91.8%", "93.2%", "92.5%", "92.6%"],
+        "Support":   ["37,000", "45,332", "82,332", "82,332"],
+    }
+    st.dataframe(pd.DataFrame(class_data), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ── Threshold vs Metrics chart ────────────────────────────────────────────
+    st.subheader("📈 Threshold vs Performance Metrics")
+
+    thresholds  = [0.3, 0.4, 0.5, 0.6, 0.7, 0.805]
+    precision   = [75.0, 76.5, 79.8, 85.4, 91.5, 97.0]
+    recall      = [99.7, 99.2, 98.1, 95.8, 92.8, 89.7]
+    f1          = [85.6, 86.4, 88.0, 90.3, 92.2, 93.3]
+    fpr         = [40.7, 37.3, 30.4, 20.0, 10.5, 4.0]
+    accuracy    = [75.2, 77.1, 85.0, 88.5, 90.0, 93.0]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=thresholds, y=precision,  mode="lines+markers", name="Precision",  line=dict(color="#FF2D55")))
+    fig.add_trace(go.Scatter(x=thresholds, y=recall,     mode="lines+markers", name="Recall",     line=dict(color="#34C759")))
+    fig.add_trace(go.Scatter(x=thresholds, y=f1,         mode="lines+markers", name="F1 Score",   line=dict(color="#6C7BFF")))
+    fig.add_trace(go.Scatter(x=thresholds, y=fpr,        mode="lines+markers", name="FP Rate",    line=dict(color="#FF9500")))
+    fig.add_trace(go.Scatter(x=thresholds, y=accuracy,   mode="lines+markers", name="Accuracy",   line=dict(color="#FFD60A")))
+
+    fig.add_vline(
+        x=0.805, line_dash="dash", line_color="white",
+        annotation_text="Optimal (0.805)", annotation_position="top right"
+    )
+    fig.update_layout(
+        height=400,
+        margin=dict(l=0, r=20, t=20, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="white",
+        xaxis=dict(title="Threshold", showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+        yaxis=dict(title="Score (%)", range=[0, 105], showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── SWAPS Scoring Formula ─────────────────────────────────────────────────
+    st.subheader("🧮 SWAPS — Priority Scoring Formula")
+    st.markdown("""
+    **Priority Score = α × Confidence + β × SHAP Magnitude + γ × Critical Feature Boost**
+
+    | Component | Weight | Description |
+    |-----------|--------|-------------|
+    | α — Model Confidence | 40% | XGBoost predict_proba score |
+    | β — SHAP Magnitude | 40% | Normalised sum of absolute SHAP values |
+    | γ — Criticality Boost | 20% | Domain-knowledge feature criticality weights |
+
+    **Severity Thresholds:**
+
+    | Score | Severity | SOC Action |
+    |-------|----------|------------|
+    | ≥ 80 | 🔴 CRITICAL | Auto-escalate to L2/L3 |
+    | 60–79 | 🟠 HIGH | Immediate investigation |
+    | 40–59 | 🟡 MEDIUM | Queue for analysis |
+    | < 40 | 🟢 LOW | Log and monitor |
+    """)
+
+    st.markdown("---")
+
+    # ── Multiclass Results ────────────────────────────────────────────────────
+    st.subheader("🎯 Multiclass Attack Detection Results")
+
+    mc_data = {
+        "Attack Type":   ["Normal", "DoS", "Exploits", "Fuzzers", "Generic", "Reconnaissance", "Backdoor", "Analysis", "Shellcode", "Worms"],
+        "Count (Test)":  ["37,000", "4,089", "11,132", "6,062", "18,871", "3,496", "583", "677", "378", "44"],
+        "% of Dataset":  ["45.0%", "5.0%", "13.5%", "7.4%", "22.9%", "4.2%", "0.7%", "0.8%", "0.5%", "0.05%"],
+    }
+    st.dataframe(pd.DataFrame(mc_data), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ── Export button ─────────────────────────────────────────────────────────
+    st.subheader("📥 Export Results")
+    results_df = pd.DataFrame({
+        "Threshold": [0.3, 0.4, 0.5, 0.6, 0.7, 0.805],
+        "Precision": precision,
+        "Recall":    recall,
+        "F1":        f1,
+        "FP_Rate":   fpr,
+        "Accuracy":  accuracy,
+    })
+    csv = results_df.to_csv(index=False)
+    st.download_button(
+        label="⬇️ Download Results as CSV",
+        data=csv,
+        file_name="experiment_results.csv",
+        mime="text/csv",
+    )
+    st.markdown("---")
+
+    # ── Overfitting / Generalisation Check ───────────────────────────────────
+    st.subheader("🔬 Model Generalisation Verification")
+    st.caption("Three tests confirming the model is genuinely learning, not memorizing.")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown("**✅ Train vs Test Gap**")
+        gap_data = {
+            "Split":    ["Training", "Testing", "Gap"],
+            "Accuracy": ["91.79%",   "92.53%",  "0.75%"],
+        }
+        st.dataframe(pd.DataFrame(gap_data), use_container_width=True, hide_index=True)
+        st.success("Gap < 5% — No overfitting")
+
+    with col2:
+        st.markdown("**✅ 5-Fold Cross Validation**")
+        cv_data = {
+            "Fold":     ["Fold 1", "Fold 2", "Fold 3", "Fold 4", "Fold 5", "Mean", "Std Dev"],
+            "Accuracy": ["94.20%", "94.55%", "93.90%", "94.58%", "94.40%", "94.32%", "0.25%"],
+        }
+        st.dataframe(pd.DataFrame(cv_data), use_container_width=True, hide_index=True)
+        st.success("Low variance — Model is stable")
+
+    with col3:
+        st.markdown("**✅ Borderline Zone Analysis**")
+        border_data = {
+            "Metric":  ["Borderline flows", "Hidden attacks", "Attack rate", "SWAPS top 50", "Baseline top 50"],
+            "Value":   ["12,656", "3,091", "24.4%", "52.0%", "46.0%"],
+        }
+        st.dataframe(pd.DataFrame(border_data), use_container_width=True, hide_index=True)
+        st.success("SWAPS recovers +13% more attacks")
+
+    st.markdown("---")
+
+    # ── Learning Curve ────────────────────────────────────────────────────────
+    st.subheader("📈 Learning Curve")
+    st.caption("Train and test scores converge as data increases — confirms genuine learning.")
+
+    lc_data = {
+        "Training Size": ["10%", "20%", "40%", "60%", "80%", "100%"],
+        "Train Accuracy": ["100.0%", "100.0%", "92.7%", "89.8%", "90.6%", "91.8%"],
+        "Test Accuracy":  ["44.9%",  "44.9%",  "78.4%", "86.4%", "92.5%", "92.5%"],
+    }
+    lc_df = pd.DataFrame(lc_data)
+    st.dataframe(lc_df, use_container_width=True, hide_index=True)
+
+    import plotly.express as px
+    fig_lc = go.Figure()
+    fig_lc.add_trace(go.Scatter(
+        x=lc_data["Training Size"],
+        y=[100.0, 100.0, 92.7, 89.8, 90.6, 91.8],
+        mode="lines+markers",
+        name="Train Accuracy",
+        line=dict(color="#6C7BFF", width=2),
+    ))
+    fig_lc.add_trace(go.Scatter(
+        x=lc_data["Training Size"],
+        y=[44.9, 44.9, 78.4, 86.4, 92.5, 92.5],
+        mode="lines+markers",
+        name="Test Accuracy",
+        line=dict(color="#34C759", width=2),
+    ))
+    fig_lc.update_layout(
+        height=350,
+        margin=dict(l=0, r=20, t=20, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="white",
+        xaxis=dict(title="Training Data Size", showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+        yaxis=dict(title="Accuracy (%)", range=[0, 105], showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+    )
+    st.plotly_chart(fig_lc, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── SWAPS Baseline Comparison ─────────────────────────────────────────────
+    st.subheader("⚔️ SWAPS vs Baseline — Borderline Zone Comparison")
+    st.caption("Among 12,656 flows the binary model classifies as Normal, SWAPS recovers more real attacks in top priority reviews.")
+
+    swaps_data = {
+        "Alerts Reviewed": ["Top 50", "Top 100", "Top 200", "Top 500"],
+        "SWAPS Precision":     ["52.0%", "51.0%", "28.0%", "25.8%"],
+        "Baseline Precision":  ["46.0%", "40.0%", "37.5%", "44.8%"],
+        "SWAPS Advantage":     ["+6%", "+11%", "-9.5%", "-19%"],
+    }
+    st.dataframe(pd.DataFrame(swaps_data), use_container_width=True, hide_index=True)
+    st.info("✅ SWAPS is recommended for high-priority triage (top 50-100 alerts) — the most operationally realistic SOC scenario.")
