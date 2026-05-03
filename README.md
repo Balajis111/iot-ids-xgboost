@@ -195,3 +195,5 @@ Sri Siddhartha Institute of Technology
 ## 📄 License
 
 MIT License
+## 🚀 Live Demo
+👉 https://iot-ids-xgboost-fkca9noiyozdvxxossxvww.streamlit.app/
