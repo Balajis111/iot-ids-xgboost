@@ -8,7 +8,6 @@ data/*.zip
 data/*.parquet
 
 # Trained model files
-models/*.pkl
 
 # Python cache
 __pycache__/
